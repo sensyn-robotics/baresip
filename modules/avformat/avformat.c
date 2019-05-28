@@ -383,7 +383,10 @@ static int alloc(struct vidsrc_st **stp, const struct vidsrc *vs,
 			}
 
 #if LIBAVCODEC_VERSION_INT >= ((53<<16)+(8<<8)+0)
-			ret = avcodec_open2(ctx, st->codec, NULL);
+			AVDictionary *opts = NULL;
+			/* Show all frames before the first keyframe */
+			av_dict_set(&opts, "flags2", "showall", 0);
+			ret = avcodec_open2(ctx, st->codec, &opts);
 #else
 			ret = avcodec_open(ctx, st->codec);
 #endif
