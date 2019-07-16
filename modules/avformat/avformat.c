@@ -315,7 +315,7 @@ static int alloc(struct vidsrc_st **stp, const struct vidsrc *vs,
 		AVDictionary *opts = NULL;
 		/* Show all frames before the first keyframe */
 		av_dict_set(&opts, "flags2", "showall", 0);
-		ret = avcodec_open2(ctx, st->codec, &opts);
+		ret = avcodec_open2(ctx, codec, &opts);
 		if (ret < 0) {
 			err = ENOENT;
 			goto out;
