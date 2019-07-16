@@ -277,7 +277,12 @@ static int alloc(struct vidsrc_st **stp, const struct vidsrc *vs,
 
 #if LIBAVFORMAT_VERSION_INT >= ((52<<16) + (110<<8) + 0)
 	(void)fmt;
-	ret = avformat_open_input(&st->ic, dev, NULL, NULL);
+	AVDictionary *input_opts = NULL;
+	if (strncmp(dev, "rtsp://", 7) == 0) {
+		av_dict_set(&input_opts, "rtsp_transport", "tcp", 0);
+	}
+
+	ret = avformat_open_input(&st->ic, dev, NULL, &input_opts);
 	if (ret < 0) {
 		warning("avformat: avformat_open_input(%s) failed (ret=%d)\n",
 			dev, ret);
@@ -383,10 +388,11 @@ static int alloc(struct vidsrc_st **stp, const struct vidsrc *vs,
 			}
 
 #if LIBAVCODEC_VERSION_INT >= ((53<<16)+(8<<8)+0)
-			AVDictionary *opts = NULL;
+			AVDictionary *codec_opts = NULL;
+
 			/* Show all frames before the first keyframe */
-			av_dict_set(&opts, "flags2", "showall", 0);
-			ret = avcodec_open2(ctx, st->codec, &opts);
+			av_dict_set(&codec_opts, "flags2", "showall", 0);
+			ret = avcodec_open2(ctx, st->codec, &codec_opts);
 #else
 			ret = avcodec_open(ctx, st->codec);
 #endif
