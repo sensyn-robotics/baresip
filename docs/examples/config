@@ -8,20 +8,18 @@
 poll_method		epoll		# poll, select, epoll ..
 
 # SIP
-sip_trans_bsize		128
 #sip_listen		0.0.0.0:5060
 #sip_certificate	cert.pem
+#sip_cafile		ca.crt
 
 # Audio
 audio_player		alsa,default
 audio_source		alsa,default
 audio_alert		alsa,default
-audio_srate		8000-48000
-audio_channels		1-2
 #ausrc_srate		48000
 #auplay_srate		48000
 #ausrc_channels		0
-#auplay_channels		0
+#auplay_channels	0
 
 # Video
 #video_source		v4l2,/dev/video0
@@ -59,7 +57,6 @@ module			stdio.so
 
 # Audio codec Modules (in order)
 module			opus.so
-#module			silk.so
 #module			amr.so
 #module			g7221.so
 #module			g722.so
@@ -67,7 +64,6 @@ module			opus.so
 module			g711.so
 #module			gsm.so
 #module			l16.so
-#module			speex.so
 #module			bv32.so
 
 # Audio filter Modules (in encoding order)
@@ -125,40 +121,44 @@ module_tmp		account.so
 # Application Modules
 
 module_app		auloop.so
+#module_app		b2bua.so
 module_app		contact.so
+#module_app		debug_cmd.so
+#module_app		dtmfio.so
+
+#module_app		echo.so
+#module_app		gtk.so
 module_app		menu.so
 #module_app		mwi.so
-#module_app		natbd.so
 #module_app		presence.so
 #module_app		syslog.so
+#module_app		mqtt.so
+#module_app		ctrl_tcp.so
 module_app		vidloop.so
-#module_app		gtk.so
 
 
 #------------------------------------------------------------------------------
 # Module parameters
 
+# UI Modules parameters
+cons_listen		0.0.0.0:5555 # cons - Console UI UDP/TCP sockets
 
-cons_listen		0.0.0.0:5555
+http_listen		0.0.0.0:8000 # httpd - HTTP Server
+
+ctrl_tcp_listen		0.0.0.0:4444 # ctrl_tcp - TCP interface JSON
 
 evdev_device		/dev/input/event0
 
-# Speex codec parameters
-speex_quality		7 # 0-10
-speex_complexity	7 # 0-10
-speex_enhancement	0 # 0-1
-speex_mode_nb		3 # 1-6
-speex_mode_wb		6 # 1-6
-speex_vbr		0 # Variable Bit Rate 0-1
-speex_vad		0 # Voice Activity Detection 0-1
-speex_agc_level		8000
-
 # Opus codec parameters
 opus_bitrate		28000 # 6000-510000
-
-# NAT Behavior Discovery
-natbd_server		creytiv.com
-natbd_interval		600		# in seconds
+#opus_stereo		yes
+#opus_sprop_stereo	yes
+#opus_cbr		no
+#opus_inbandfec	no
+#opus_dtx		no
+#opus_mirror		no
+#opus_complexity	10
+#opus_application	audio # {voip,audio}
 
 # Selfview
 video_selfview		window # {window,pip}
@@ -167,11 +167,19 @@ video_selfview		window # {window,pip}
 # ICE
 ice_turn		no
 ice_debug		no
-ice_nomination		regular	# {regular,aggressive}
-ice_mode		full	# {full,lite}
+ice_nomination		regular # {regular,aggressive}
+ice_mode		full # {full,lite}
 
 # ZRTP
 #zrtp_hash		no  # Disable SDP zrtp-hash (not recommended)
 
 # sndfile #
 snd_path 		/tmp/
+
+# MQTT
+#mqtt_broker_host	sollentuna.example.com
+#mqtt_broker_port	1883
+#mqtt_broker_clientid	baresip01 # Has to be unique for each client, defaults to "baresip"
+#mqtt_broker_user	alfred
+#mqtt_broker_password	Crocus
+#mqtt_basetopic		baresip/01 # May be uniqe for each client you want to control. Defaults to "baresip"

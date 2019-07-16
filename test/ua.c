@@ -21,6 +21,7 @@ struct test {
 	unsigned got_register_ok;
 	unsigned n_resp;
 	uint32_t magic;
+	enum sip_transp tp_resp;
 };
 
 
@@ -93,24 +94,36 @@ static void ua_event_handler(struct ua *ua, enum ua_event ev,
 }
 
 
+static void sip_server_exit_handler(void *arg)
+{
+	(void)arg;
+	re_cancel();
+}
+
+
 static int reg(enum sip_transp tp)
 {
 	struct test t;
 	char aor[256];
 	int err;
 
-	memset(&t, 0, sizeof t);
+	memset(&t, 0, sizeof(t));
 
-	err = sip_server_alloc(&t.srvv[0]);
+	err = sip_server_alloc(&t.srvv[0], sip_server_exit_handler, NULL);
 	if (err) {
 		warning("failed to create sip server (%d/%m)\n", err, err);
 		goto out;
 	}
 
+	t.srvc = 1;
+
 	err = sip_server_uri(t.srvv[0], aor, sizeof(aor), tp);
 	TEST_ERR(err);
 
 	err = ua_alloc(&t.ua, aor);
+	TEST_ERR(err);
+
+	err = ua_register(t.ua);
 	TEST_ERR(err);
 
 	err = uag_event_register(ua_event_handler, &t);
@@ -144,7 +157,7 @@ int test_ua_register(void)
 {
 	int err = 0;
 
-	err = ua_init("test", true, true, true, false);
+	err = ua_init("test", true, true, true);
 	TEST_ERR(err);
 
 	err |= reg(SIP_TRANSP_UDP);
@@ -153,6 +166,7 @@ int test_ua_register(void)
 	err |= reg(SIP_TRANSP_TLS);
 #endif
 
+	ua_stop_all(true);
 	ua_close();
 
  out:
@@ -163,6 +177,7 @@ int test_ua_register(void)
 int test_ua_alloc(void)
 {
 	struct ua *ua;
+	struct mbuf *mb = mbuf_alloc(512);
 	uint32_t n_uas = list_count(uag_list());
 	int err = 0;
 
@@ -182,11 +197,17 @@ int test_ua_alloc(void)
 	ASSERT_EQ((n_uas + 1), list_count(uag_list()));
 	ASSERT_TRUE(ua == uag_find_aor("sip:user@127.0.0.1"));
 
+	/* verify URI complete function */
+	err = ua_uri_complete(ua, mb, "bob");
+	ASSERT_EQ(0, err);
+	TEST_STRCMP("sip:bob@127.0.0.1", 17, mb->buf, mb->end);
+
 	mem_deref(ua);
 
 	ASSERT_EQ((n_uas), list_count(uag_list()));
 
  out:
+	mem_deref(mb);
 	return err;
 }
 
@@ -242,7 +263,7 @@ static int reg_dns(enum sip_transp tp)
 	size_t i;
 	int err;
 
-	memset(&t, 0, sizeof t);
+	memset(&t, 0, sizeof(t));
 
 	/*
 	 * Setup server-side mocks:
@@ -254,14 +275,15 @@ static int reg_dns(enum sip_transp tp)
 	info("| DNS-server on %J\n", &dnssrv->addr);
 
 	/* NOTE: must be done before ua_init() */
-	err = net_use_nameserver(net, &dnssrv->addr);
+	err = net_use_nameserver(net, &dnssrv->addr, 1);
 	TEST_ERR(err);
 
 	for (i=0; i<server_count; i++) {
 		struct sa sip_addr;
 		char arec[256];
 
-		err = sip_server_alloc(&t.srvv[i]);
+		err = sip_server_alloc(&t.srvv[i],
+				       sip_server_exit_handler, NULL);
 		if (err) {
 			warning("failed to create sip server (%d/%m)\n",
 				err, err);
@@ -301,10 +323,13 @@ static int reg_dns(enum sip_transp tp)
 	 * Start SIP client:
 	 */
 
-	err = ua_init("test", true, true, true, false);
+	err = ua_init("test", true, true, true);
 	TEST_ERR(err);
 
 	err = ua_alloc(&t.ua, aor);
+	TEST_ERR(err);
+
+	err = ua_register(t.ua);
 	TEST_ERR(err);
 
 	err = uag_event_register(ua_event_handler, &t);
@@ -372,13 +397,15 @@ static int reg_auth(enum sip_transp tp)
 	char aor[256];
 	int err;
 
-	memset(&t, 0, sizeof t);
+	memset(&t, 0, sizeof(t));
 
-	err = sip_server_alloc(&t.srvv[0]);
+	err = sip_server_alloc(&t.srvv[0], sip_server_exit_handler, NULL);
 	if (err) {
 		warning("failed to create sip server (%d/%m)\n", err, err);
 		goto out;
 	}
+
+	t.srvc = 1;
 
 	err = domain_add(t.srvv[0], DOMAIN);
 	TEST_ERR(err);
@@ -408,6 +435,9 @@ static int reg_auth(enum sip_transp tp)
 	err = ua_alloc(&t.ua, aor);
 	TEST_ERR(err);
 
+	err = ua_register(t.ua);
+	TEST_ERR(err);
+
 	err = uag_event_register(ua_event_handler, &t);
 	if (err)
 		goto out;
@@ -433,7 +463,6 @@ static int reg_auth(enum sip_transp tp)
 	uag_event_unregister(ua_event_handler);
 	test_reset(&t);
 
-
 	return err;
 }
 
@@ -442,7 +471,7 @@ int test_ua_register_auth(void)
 {
 	int err;
 
-	err = ua_init("test", true, true, true, false);
+	err = ua_init("test", true, true, true);
 	TEST_ERR(err);
 
 	err |= reg_auth(SIP_TRANSP_UDP);
@@ -477,7 +506,7 @@ static int reg_auth_dns(enum sip_transp tp)
 	unsigned total_req = 0;
 	int err;
 
-	memset(&t, 0, sizeof t);
+	memset(&t, 0, sizeof(t));
 
 	/*
 	 * Setup server-side mocks:
@@ -489,14 +518,15 @@ static int reg_auth_dns(enum sip_transp tp)
 	info("| DNS-server on %J\n", &dnssrv->addr);
 
 	/* NOTE: must be done before ua_init() */
-	err = net_use_nameserver(net, &dnssrv->addr);
+	err = net_use_nameserver(net, &dnssrv->addr, 1);
 	TEST_ERR(err);
 
 	for (i=0; i<server_count; i++) {
 		struct sa sip_addr;
 		char arec[256];
 
-		err = sip_server_alloc(&t.srvv[i]);
+		err = sip_server_alloc(&t.srvv[i],
+				       sip_server_exit_handler, NULL);
 		if (err) {
 			warning("failed to create sip server (%d/%m)\n",
 				err, err);
@@ -552,10 +582,13 @@ static int reg_auth_dns(enum sip_transp tp)
 	 * Start SIP client:
 	 */
 
-	err = ua_init("test", true, true, true, false);
+	err = ua_init("test", true, true, true);
 	TEST_ERR(err);
 
 	err = ua_alloc(&t.ua, aor);
+	TEST_ERR(err);
+
+	err = ua_register(t.ua);
 	TEST_ERR(err);
 
 	err = uag_event_register(ua_event_handler, &t);
@@ -641,6 +674,8 @@ static void options_resp_handler(int err, const struct sip_msg *msg, void *arg)
 
 	++t->n_resp;
 
+	t->tp_resp = msg->tp;
+
 	/* Verify SIP headers */
 
 	ASSERT_TRUE(sip_msg_hdr_has_value(msg, SIP_HDR_ALLOW, "INVITE"));
@@ -673,7 +708,7 @@ static void options_resp_handler(int err, const struct sip_msg *msg, void *arg)
 }
 
 
-int test_ua_options(void)
+static int test_ua_options_base(enum sip_transp transp)
 {
 	struct test t;
 	struct sa laddr;
@@ -682,17 +717,22 @@ int test_ua_options(void)
 
 	test_init(&t);
 
-	err = ua_init("test", true, false, false, false);
+	err = ua_init("test",
+		      transp == SIP_TRANSP_UDP,
+		      transp == SIP_TRANSP_TCP,
+		      false);
 	TEST_ERR(err);
 
-	err = sip_transp_laddr(uag_sip(), &laddr, SIP_TRANSP_UDP, NULL);
+	err = sip_transp_laddr(uag_sip(), &laddr, transp, NULL);
 	TEST_ERR(err);
 
 	err = ua_alloc(&t.ua, "Foo <sip:user@127.0.0.1>;regint=0");
 	TEST_ERR(err);
 
+	/* NOTE: no angle brackets in the Request URI */
 	n = re_snprintf(uri, sizeof(uri),
-			"sip:user@127.0.0.1:%u", sa_port(&laddr));
+			"sip:user@127.0.0.1:%u%s",
+			sa_port(&laddr), sip_transp_param(transp));
 	ASSERT_TRUE(n > 0);
 
 	err = ua_options_send(t.ua, uri, options_resp_handler, &t);
@@ -703,10 +743,14 @@ int test_ua_options(void)
 	if (err)
 		goto out;
 
-	TEST_ERR(t.err);
+	if (t.err) {
+		err = t.err;
+		goto out;
+	}
 
 	/* verify after test is complete */
 	ASSERT_EQ(1, t.n_resp);
+	ASSERT_EQ(transp, t.tp_resp);
 
  out:
 	test_reset(&t);
@@ -714,5 +758,19 @@ int test_ua_options(void)
 	ua_stop_all(true);
 	ua_close();
 
+	return err;
+}
+
+
+int test_ua_options(void)
+{
+	int err = 0;
+
+	err |= test_ua_options_base(SIP_TRANSP_UDP);
+	TEST_ERR(err);
+	err |= test_ua_options_base(SIP_TRANSP_TCP);
+	TEST_ERR(err);
+
+ out:
 	return err;
 }

@@ -15,6 +15,12 @@
  * @defgroup aufile aufile
  *
  * Audio module for using a WAV-file as audio input
+ *
+ * Sample config:
+ *
+ \verbatim
+  audio_source            aufile,/tmp/test.wav
+ \endverbatim
  */
 
 
@@ -70,6 +76,13 @@ static void *play_thread(void *arg)
 
 		if (ts > now)
 			continue;
+
+#if 1
+		if (now > ts + 100) {
+			debug("aufile: cpu lagging behind (%llu ms)\n",
+			      now - ts);
+		}
+#endif
 
 		aubuf_read_samp(st->aubuf, sampv, st->sampc);
 

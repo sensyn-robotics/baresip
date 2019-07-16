@@ -44,7 +44,6 @@ struct mnat_media {
 };
 
 
-static struct mnat *mnat;
 static struct sa natpmp_srv, natpmp_extaddr;
 static struct natpmp_req *natpmp_ext;
 
@@ -255,15 +254,18 @@ static int comp_alloc(struct comp *comp, void *sock)
 
 
 static int media_alloc(struct mnat_media **mp, struct mnat_sess *sess,
-		       int proto, void *sock1, void *sock2,
-		       struct sdp_media *sdpm)
+		       struct udp_sock *sock1, struct udp_sock *sock2,
+		       struct sdp_media *sdpm,
+		       mnat_connected_h *connh, void *arg)
 {
 	struct mnat_media *m;
 	unsigned i;
 	int err = 0;
 	(void)sock2;
+	(void)connh;
+	(void)arg;
 
-	if (!mp || !sess || !sdpm || proto != IPPROTO_UDP)
+	if (!mp || !sess || !sdpm)
 		return EINVAL;
 	if (!sock1)
 		return EINVAL;
@@ -347,6 +349,13 @@ static bool net_rt_handler(const char *ifname, const struct sa *dst,
 }
 
 
+static struct mnat mnat_natpmp = {
+	.id      = "natpmp",
+	.sessh   = session_alloc,
+	.mediah  = media_alloc,
+};
+
+
 static int module_init(void)
 {
 	int err;
@@ -365,14 +374,15 @@ static int module_init(void)
 	if (err)
 		return err;
 
-	return mnat_register(&mnat, baresip_mnatl(), "natpmp", NULL,
-			     session_alloc, media_alloc, NULL);
+	mnat_register(baresip_mnatl(), &mnat_natpmp);
+
+	return 0;
 }
 
 
 static int module_close(void)
 {
-	mnat       = mem_deref(mnat);
+	mnat_unregister(&mnat_natpmp);
 	natpmp_ext = mem_deref(natpmp_ext);
 
 	return 0;

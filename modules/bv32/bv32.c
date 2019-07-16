@@ -10,7 +10,9 @@
 #include <bv32/bitpack.h>
 
 
-/*
+/**
+ * @defgroup bv32 bv32
+ *
  * BroadVoice32 Wideband Audio codec (RFC 4298)
  *
  * http://www.broadcom.com/support/broadvoice/downloads.php
@@ -163,7 +165,7 @@ static int plc(struct audec_state *st, int fmt, void *sampv, size_t *sampc)
 
 
 static struct aucodec bv32 = {
-	LE_INIT, 0, "BV32", 16000, 16000, 1, NULL,
+	LE_INIT, 0, "BV32", 16000, 16000, 1, 1, NULL,
 	encode_update, encode,
 	decode_update, decode, plc,
 	NULL, NULL

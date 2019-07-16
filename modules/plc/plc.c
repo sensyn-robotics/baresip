@@ -8,6 +8,7 @@
 
 #include <spandsp.h>
 #include <re.h>
+#include <rem_au.h>
 #include <baresip.h>
 
 
@@ -35,12 +36,14 @@ static void destructor(void *arg)
 
 
 static int update(struct aufilt_dec_st **stp, void **ctx,
-		  const struct aufilt *af, struct aufilt_prm *prm)
+		  const struct aufilt *af, struct aufilt_prm *prm,
+		  const struct audio *au)
 {
 	struct plc_st *st;
 	int err = 0;
 	(void)ctx;
 	(void)af;
+	(void)au;
 
 	if (!stp || !prm)
 		return EINVAL;
@@ -48,10 +51,15 @@ static int update(struct aufilt_dec_st **stp, void **ctx,
 	if (*stp)
 		return 0;
 
-	/* XXX: add support for stereo PLC */
 	if (prm->ch != 1) {
 		warning("plc: only mono supported (ch=%u)\n", prm->ch);
 		return ENOSYS;
+	}
+
+	if (prm->fmt != AUFMT_S16LE) {
+		warning("plc: unsupported sample format (%s)\n",
+			aufmt_name(prm->fmt));
+		return ENOTSUP;
 	}
 
 	st = mem_zalloc(sizeof(*st), destructor);
@@ -62,8 +70,6 @@ static int update(struct aufilt_dec_st **stp, void **ctx,
 		err = ENOMEM;
 		goto out;
 	}
-
-	st->sampc = prm->srate * prm->ch * prm->ptime / 1000;
 
  out:
 	if (err)
@@ -80,13 +86,18 @@ static int update(struct aufilt_dec_st **stp, void **ctx,
  *
  * NOTE: sampc == 0 , means Packet loss
  */
-static int decode(struct aufilt_dec_st *st, int16_t *sampv, size_t *sampc)
+static int decode(struct aufilt_dec_st *st, void *sampv, size_t *sampc)
 {
 	struct plc_st *plc = (struct plc_st *)st;
 
-	if (*sampc)
+	if (!st || !sampv || !sampc)
+		return EINVAL;
+
+	if (*sampc) {
 		plc_rx(&plc->plc, sampv, (int)*sampc);
-	else
+		plc->sampc = *sampc;
+	}
+	else if (plc->sampc)
 		*sampc = plc_fillin(&plc->plc, sampv, (int)plc->sampc);
 
 	return 0;
@@ -101,6 +112,7 @@ static struct aufilt plc = {
 static int module_init(void)
 {
 	aufilt_register(baresip_aufiltl(), &plc);
+
 	return 0;
 }
 
@@ -108,6 +120,7 @@ static int module_init(void)
 static int module_close(void)
 {
 	aufilt_unregister(&plc);
+
 	return 0;
 }
 

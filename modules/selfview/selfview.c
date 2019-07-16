@@ -102,10 +102,13 @@ static int selfview_alloc(struct selfview **selfviewp, void **ctx)
 
 
 static int encode_update(struct vidfilt_enc_st **stp, void **ctx,
-			 const struct vidfilt *vf)
+			 const struct vidfilt *vf, struct vidfilt_prm *prm,
+			 const struct video *vid)
 {
 	struct selfview_enc *st;
 	int err;
+	(void)prm;
+	(void)vid;
 
 	if (!stp || !ctx || !vf)
 		return EINVAL;
@@ -129,10 +132,13 @@ static int encode_update(struct vidfilt_enc_st **stp, void **ctx,
 
 
 static int decode_update(struct vidfilt_dec_st **stp, void **ctx,
-			 const struct vidfilt *vf)
+			 const struct vidfilt *vf, struct vidfilt_prm *prm,
+			 const struct video *vid)
 {
 	struct selfview_dec *st;
 	int err;
+	(void)prm;
+	(void)vid;
 
 	if (!stp || !ctx || !vf)
 		return EINVAL;
@@ -152,7 +158,8 @@ static int decode_update(struct vidfilt_dec_st **stp, void **ctx,
 }
 
 
-static int encode_win(struct vidfilt_enc_st *st, struct vidframe *frame)
+static int encode_win(struct vidfilt_enc_st *st, struct vidframe *frame,
+		      uint64_t *timestamp)
 {
 	struct selfview_enc *enc = (struct selfview_enc *)st;
 	int err;
@@ -168,15 +175,17 @@ static int encode_win(struct vidfilt_enc_st *st, struct vidframe *frame)
 			return err;
 	}
 
-	return vidisp_display(enc->disp, "Selfview", frame);
+	return vidisp_display(enc->disp, "Selfview", frame, *timestamp);
 }
 
 
-static int encode_pip(struct vidfilt_enc_st *st, struct vidframe *frame)
+static int encode_pip(struct vidfilt_enc_st *st, struct vidframe *frame,
+		      uint64_t *timestamp)
 {
 	struct selfview_enc *enc = (struct selfview_enc *)st;
 	struct selfview *selfview = enc->selfview;
 	int err = 0;
+	(void)timestamp;
 
 	if (!frame)
 		return 0;
@@ -204,10 +213,12 @@ static int encode_pip(struct vidfilt_enc_st *st, struct vidframe *frame)
 }
 
 
-static int decode_pip(struct vidfilt_dec_st *st, struct vidframe *frame)
+static int decode_pip(struct vidfilt_dec_st *st, struct vidframe *frame,
+		      uint64_t *timestamp)
 {
 	struct selfview_dec *dec = (struct selfview_dec *)st;
 	struct selfview *sv = dec->selfview;
+	(void)timestamp;
 
 	if (!frame)
 		return 0;

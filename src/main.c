@@ -49,6 +49,7 @@ static void usage(void)
 	(void)re_fprintf(stderr,
 			 "Usage: baresip [options]\n"
 			 "options:\n"
+			 "\t-4               Prefer IPv4\n"
 #if HAVE_INET6
 			 "\t-6               Prefer IPv6\n"
 #endif
@@ -59,6 +60,7 @@ static void usage(void)
 			 "\t-p <path>        Audio files\n"
 			 "\t-h -?            Help\n"
 			 "\t-t               Test and exit\n"
+			 "\t-n <net_if>      Specify network interface\n"
 			 "\t-u <parameters>  Extra UA parameters\n"
 			 "\t-v               Verbose debug\n"
 			 );
@@ -67,9 +69,10 @@ static void usage(void)
 
 int main(int argc, char *argv[])
 {
-	bool prefer_ipv6 = false, run_daemon = false, test = false;
+	int prefer_ipv6 = -1, run_daemon = false, test = false;
 	const char *ua_eprm = NULL;
 	const char *execmdv[16];
+	const char *net_interface = NULL;
 	const char *audio_path = NULL;
 	const char *modv[16];
 	size_t execmdc = 0;
@@ -77,8 +80,13 @@ int main(int argc, char *argv[])
 	size_t i;
 	int err;
 
+	/*
+	 * turn off buffering on stdout
+	 */
+	setbuf(stdout, NULL);
+
 	(void)re_fprintf(stdout, "baresip v%s"
-			 " Copyright (C) 2010 - 2018"
+			 " Copyright (C) 2010 - 2019"
 			 " Alfred E. Heggestad et al.\n",
 			 BARESIP_VERSION);
 
@@ -90,7 +98,7 @@ int main(int argc, char *argv[])
 
 #ifdef HAVE_GETOPT
 	for (;;) {
-		const int c = getopt(argc, argv, "6de:f:p:hu:vtm:");
+		const int c = getopt(argc, argv, "46de:f:p:hu:n:vtm:");
 		if (0 > c)
 			break;
 
@@ -100,6 +108,10 @@ int main(int argc, char *argv[])
 		case 'h':
 			usage();
 			return -2;
+
+		case '4':
+			prefer_ipv6 = false;
+			break;
 
 #if HAVE_INET6
 		case '6':
@@ -143,6 +155,10 @@ int main(int argc, char *argv[])
 			test = true;
 			break;
 
+		case 'n':
+			net_interface = optarg;
+			break;
+
 		case 'u':
 			ua_eprm = optarg;
 			break;
@@ -167,10 +183,28 @@ int main(int argc, char *argv[])
 	}
 
 	/*
+	 * Set the network interface before initializing the config
+	 */
+	if (net_interface) {
+		struct config *theconf = conf_config();
+
+		str_ncpy(theconf->net.ifname, net_interface,
+			 sizeof(theconf->net.ifname));
+	}
+
+	/*
+	 * Set prefer_ipv6 preferring the one given in -6 argument (if any)
+	 */
+	if (prefer_ipv6 != -1)
+		conf_config()->net.prefer_ipv6 = prefer_ipv6;
+	else
+		prefer_ipv6 = conf_config()->net.prefer_ipv6;
+
+	/*
 	 * Initialise the top-level baresip struct, must be
 	 * done AFTER configuration is complete.
-	 */
-	err = baresip_init(conf_config(), prefer_ipv6);
+	*/
+	err = baresip_init(conf_config());
 	if (err) {
 		warning("main: baresip init failed (%m)\n", err);
 		goto out;
@@ -202,7 +236,7 @@ int main(int argc, char *argv[])
 
 	/* Initialise User Agents */
 	err = ua_init("baresip v" BARESIP_VERSION " (" ARCH "/" OS ")",
-		      true, true, true, prefer_ipv6);
+		      true, true, true);
 	if (err)
 		goto out;
 
@@ -245,6 +279,10 @@ int main(int argc, char *argv[])
 		ua_stop_all(true);
 
 	ua_close();
+
+	/* note: must be done before mod_close() */
+	module_app_unload();
+
 	conf_close();
 
 	baresip_close();

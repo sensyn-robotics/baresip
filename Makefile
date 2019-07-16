@@ -7,13 +7,10 @@
 # Internal features:
 #
 #   USE_TLS           Enable SIP over TLS transport
-#   USE_VIDEO         Enable Video-support
 #
 
-USE_VIDEO := 1
-
 PROJECT	  := baresip
-VERSION   := 0.5.9
+VERSION   := 0.6.3
 DESCR     := "Baresip is a modular SIP User-Agent with audio and video support"
 
 # Verbose and silent build modes
@@ -77,14 +74,10 @@ endif
 
 
 # Optional dependencies
-ifneq ($(USE_VIDEO),)
-CFLAGS    += -DUSE_VIDEO=1
-endif
 ifneq ($(STATIC),)
 CFLAGS    += -DSTATIC=1
 CXXFLAGS  += -DSTATIC=1
 endif
-CFLAGS    += -DMODULE_CONF
 
 INSTALL := install
 ifeq ($(DESTDIR),)

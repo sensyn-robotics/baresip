@@ -1,5 +1,5 @@
 /**
- * @file gst_video/encode.c  Video codecs using Gstreamer video pipeline
+ * @file gst_video1/encode.c  Video codecs using Gstreamer video pipeline
  *
  * Copyright (C) 2010 - 2013 Creytiv.com
  * Copyright (C) 2014 Fadeev Alexander
@@ -131,7 +131,7 @@ static GstFlowReturn appsink_new_sample_cb(GstAppSink *sink,
 		data = info.data;
 		size = info.size;
 
-		ts = GST_BUFFER_DTS_OR_PTS(buffer);
+		ts = GST_BUFFER_PTS(buffer);
 
 		if (ts == GST_CLOCK_TIME_NONE) {
 			warning("gst_video: timestamp is unknown\n");
@@ -471,16 +471,14 @@ int gst_video1_encoder_set(struct videnc_state **stp,
 /*
  * couple gstreamer tightly by lock-stepping
  */
-static int pipeline_push(struct videnc_state *st, const struct vidframe *frame)
+static int pipeline_push(struct videnc_state *st, const struct vidframe *frame,
+			 uint64_t timestamp)
 {
 	GstBuffer *buffer;
 	uint8_t *data;
 	size_t size;
 	GstFlowReturn ret;
 	int err = 0;
-
-#if 1
-	/* XXX: should not block the function here */
 
 	/*
 	 * Wait "start feed".
@@ -496,7 +494,6 @@ static int pipeline_push(struct videnc_state *st, const struct vidframe *frame)
 	pthread_mutex_unlock(&st->streamer.wait.mutex);
 	if (err)
 		return err;
-#endif
 
 	/*
 	 * Copy frame into buffer for gstreamer
@@ -530,6 +527,9 @@ static int pipeline_push(struct videnc_state *st, const struct vidframe *frame)
 	gst_buffer_insert_memory(buffer, -1,
 				 gst_memory_new_wrapped (0, data, size, 0,
 							 size, data, g_free));
+
+	/* convert timestamp to nanoseconds */
+	buffer->pts = timestamp * 1000000000ULL / VIDEO_TIMEBASE;
 
 	/*
 	 * Push data and EOS into gstreamer.
@@ -577,7 +577,7 @@ static int pipeline_push(struct videnc_state *st, const struct vidframe *frame)
 
 
 int gst_video1_encode(struct videnc_state *st, bool update,
-		     const struct vidframe *frame)
+		      const struct vidframe *frame, uint64_t timestamp)
 {
 	int err;
 
@@ -607,7 +607,7 @@ int gst_video1_encode(struct videnc_state *st, bool update,
 	 * Push frame into pipeline.
 	 * Function call will return once frame has been processed completely.
 	 */
-	err = pipeline_push(st, frame);
+	err = pipeline_push(st, frame, timestamp);
 
 	return err;
 }

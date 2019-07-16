@@ -21,11 +21,6 @@
 #define FOREACH_STREAM						\
 	for (le = call->streaml.head; le; le = le->next)
 
-/** Call constants */
-enum {
-	PTIME           = 20,    /**< Packet time for audio               */
-};
-
 
 /** Call States */
 enum state {
@@ -50,10 +45,8 @@ struct call {
 	struct sipnot *not;       /**< REFER/NOTIFY client                  */
 	struct list streaml;      /**< List of mediastreams (struct stream) */
 	struct audio *audio;      /**< Audio stream                         */
-#ifdef USE_VIDEO
 	struct video *video;      /**< Video stream                         */
 	struct bfcp *bfcp;        /**< BFCP Client                          */
-#endif
 	enum state state;         /**< Call state                           */
 	char *local_uri;          /**< Local SIP uri                        */
 	char *local_name;         /**< Local display name                   */
@@ -67,7 +60,7 @@ struct call {
 	time_t time_stop;         /**< Time when call stopped               */
 	bool outgoing;            /**< True if outgoing, false if incoming  */
 	bool got_offer;           /**< Got SDP Offer from Peer              */
-	bool on_hold;             /**< True if call is on hold              */
+	bool on_hold;             /**< True if call is on hold (local)      */
 	struct mnat_sess *mnats;  /**< Media NAT session                    */
 	bool mnat_wait;           /**< Waiting for MNAT to establish        */
 	struct menc_sess *mencs;  /**< Media encryption session state       */
@@ -82,6 +75,7 @@ struct call {
 
 	uint32_t rtp_timeout_ms;  /**< RTP Timeout in [ms]                  */
 	uint32_t linenum;         /**< Line number from 1 to N              */
+	struct list custom_hdrs;  /**< List of custom headers if any        */
 };
 
 
@@ -110,48 +104,78 @@ static void set_state(struct call *call, enum state st)
 }
 
 
-static void call_stream_start(struct call *call, bool active)
+static const struct sdp_format *sdp_media_rcodec(const struct sdp_media *m)
+{
+	const struct list *lst;
+	struct le *le;
+
+	if (!m || !sdp_media_rport(m))
+		return NULL;
+
+	lst = sdp_media_format_lst(m, false);
+
+	for (le=list_head(lst); le; le=le->next) {
+
+		const struct sdp_format *fmt = le->data;
+
+		if (!fmt->sup)
+			continue;
+
+		if (!fmt->data)
+			continue;
+
+		return fmt;
+	}
+
+	return NULL;
+}
+
+
+static int start_audio(struct call *call)
 {
 	const struct sdp_format *sc;
-	int err;
+	int err = 0;
 
 	/* Audio Stream */
-	sc = sdp_media_rformat(stream_sdpmedia(audio_strm(call->audio)), NULL);
+	sc = sdp_media_rcodec(stream_sdpmedia(audio_strm(call->audio)));
 	if (sc) {
 		struct aucodec *ac = sc->data;
 
-		if (ac) {
-			err  = audio_encoder_set(call->audio, sc->data,
-						 sc->pt, sc->params);
-			if (err) {
-				warning("call: start:"
-					" audio_encoder_set error: %m\n", err);
-			}
-			err |= audio_decoder_set(call->audio, sc->data,
-						 sc->pt, sc->params);
-			if (err) {
-				warning("call: start:"
-					" audio_decoder_set error: %m\n", err);
-			}
-
-			if (!err) {
-				err = audio_start(call->audio);
-				if (err) {
-					warning("call: start:"
-						" audio_start error: %m\n",
-						err);
-				}
-			}
+		err  = audio_encoder_set(call->audio, ac,
+					 sc->pt, sc->params);
+		if (err) {
+			warning("call: start:"
+				" audio_encoder_set error: %m\n", err);
 		}
-		else {
-			info("call: no common audio-codecs..\n");
+		err |= audio_decoder_set(call->audio, ac,
+					 sc->pt, sc->params);
+		if (err) {
+			warning("call: start:"
+				" audio_decoder_set error: %m\n", err);
+		}
+
+		if (!err) {
+			err = audio_start(call->audio);
+			if (err) {
+				warning("call: start:"
+					" audio_start error: %m\n",
+					err);
+			}
 		}
 	}
 	else {
 		info("call: audio stream is disabled..\n");
 	}
 
-#ifdef USE_VIDEO
+	return err;
+}
+
+
+static int start_video(struct call *call)
+{
+	const struct sdp_format *sc;
+	int err = 0;
+
 	/* Video Stream */
 	sc = sdp_media_rformat(stream_sdpmedia(video_strm(call->video)), NULL);
 	if (sc) {
@@ -170,13 +194,36 @@ static void call_stream_start(struct call *call, bool active)
 		info("call: video stream is disabled..\n");
 	}
 
+	return err;
+}
+
+
+static void call_stream_start(struct call *call, bool active)
+{
+	int err;
+
+	debug("call: stream start (active=%d)\n", active);
+
+	if (stream_is_ready(audio_strm(call->audio))) {
+		err = start_audio(call);
+		if (err) {
+			warning("call: could not start audio: %m\n", err);
+		}
+	}
+
+	if (stream_is_ready(video_strm(call->video))) {
+		err = start_video(call);
+		if (err) {
+			warning("call: could not start video: %m\n", err);
+		}
+	}
+
 	if (call->bfcp) {
 		err = bfcp_start(call->bfcp);
 		if (err) {
 			warning("call: could not start BFCP: %m\n", err);
 		}
 	}
-#endif
 
 	if (active) {
 		struct le *le;
@@ -202,9 +249,7 @@ static void call_stream_stop(struct call *call)
 	audio_stop(call->audio);
 
 	/* Video */
-#ifdef USE_VIDEO
 	video_stop(call->video);
-#endif
 
 	tmr_cancel(&call->tmr_inv);
 }
@@ -240,7 +285,7 @@ static void invite_timeout(void *arg)
 }
 
 
-/** Called when all media streams are established */
+/* Called when all media streams are established */
 static void mnat_handler(int err, uint16_t scode, const char *reason,
 			 void *arg)
 {
@@ -260,7 +305,7 @@ static void mnat_handler(int err, uint16_t scode, const char *reason,
 		return;
 	}
 
-	info("call: media-nat `%s' established\n", call->acc->mnatid);
+	info("call: media-nat '%s' established\n", call->acc->mnatid);
 
 	/* Re-INVITE */
 	if (!call->mnat_wait) {
@@ -287,48 +332,33 @@ static void mnat_handler(int err, uint16_t scode, const char *reason,
 }
 
 
-static int update_media(struct call *call)
+static int update_audio(struct call *call)
 {
 	const struct sdp_format *sc;
-	struct le *le;
 	int err = 0;
 
-	debug("call: update media\n");
-
-	/* media attributes */
-	audio_sdp_attr_decode(call->audio);
-
-#ifdef USE_VIDEO
-	if (call->video)
-		video_sdp_attr_decode(call->video);
-#endif
-
-	/* Update each stream */
-	FOREACH_STREAM {
-		stream_update(le->data);
-	}
-
-	if (call->acc->mnat && call->acc->mnat->updateh && call->mnats)
-		err = call->acc->mnat->updateh(call->mnats);
-
-	sc = sdp_media_rformat(stream_sdpmedia(audio_strm(call->audio)), NULL);
+	sc = sdp_media_rcodec(stream_sdpmedia(audio_strm(call->audio)));
 	if (sc) {
 		struct aucodec *ac = sc->data;
-		if (ac) {
-			err  = audio_decoder_set(call->audio, sc->data,
-						 sc->pt, sc->params);
-			err |= audio_encoder_set(call->audio, sc->data,
-						 sc->pt, sc->params);
-		}
-		else {
-			info("no common audio-codecs..\n");
-		}
+
+		err  = audio_decoder_set(call->audio, ac,
+					 sc->pt, sc->params);
+		err |= audio_encoder_set(call->audio, ac,
+					 sc->pt, sc->params);
 	}
 	else {
 		info("audio stream is disabled..\n");
 	}
 
-#ifdef USE_VIDEO
+	return err;
+}
+
+
+static int update_video(struct call *call)
+{
+	const struct sdp_format *sc;
+	int err = 0;
+
 	sc = sdp_media_rformat(stream_sdpmedia(video_strm(call->video)), NULL);
 	if (sc) {
 		err = video_encoder_set(call->video, sc->data,
@@ -350,7 +380,39 @@ static int update_media(struct call *call)
 		info("video stream is disabled..\n");
 		video_stop(call->video);
 	}
-#endif
+
+	return err;
+}
+
+
+static int update_media(struct call *call)
+{
+	struct le *le;
+	int err = 0;
+
+	debug("call: update media\n");
+
+	/* media attributes */
+	audio_sdp_attr_decode(call->audio);
+
+	if (call->video)
+		video_sdp_attr_decode(call->video);
+
+	/* Update each stream */
+	FOREACH_STREAM {
+		stream_update(le->data);
+	}
+
+	if (call->acc->mnat && call->acc->mnat->updateh && call->mnats)
+		err = call->acc->mnat->updateh(call->mnats);
+
+	if (stream_is_ready(audio_strm(call->audio))) {
+		err |= update_audio(call);
+	}
+
+	if (stream_is_ready(video_strm(call->video))) {
+		err |= update_video(call);
+	}
 
 	return err;
 }
@@ -385,16 +447,16 @@ static void call_destructor(void *arg)
 	mem_deref(call->peer_uri);
 	mem_deref(call->peer_name);
 	mem_deref(call->audio);
-#ifdef USE_VIDEO
 	mem_deref(call->video);
 	mem_deref(call->bfcp);
-#endif
 	mem_deref(call->sdp);
 	mem_deref(call->mnats);
 	mem_deref(call->mencs);
 	mem_deref(call->sub);
 	mem_deref(call->not);
 	mem_deref(call->acc);
+
+	list_flush(&call->custom_hdrs);
 }
 
 
@@ -419,12 +481,10 @@ static void audio_error_handler(int err, const char *str, void *arg)
 		warning("call: audio device error: %m (%s)\n", err, str);
 	}
 
-	call_stream_stop(call);
-	call_event_handler(call, CALL_EVENT_CLOSED, str);
+	ua_event(call->ua, UA_EVENT_AUDIO_ERROR, call, "%d,%s", err, str);
 }
 
 
-#ifdef USE_VIDEO
 static void video_error_handler(int err, const char *str, void *arg)
 {
 	struct call *call = arg;
@@ -435,7 +495,45 @@ static void video_error_handler(int err, const char *str, void *arg)
 	call_stream_stop(call);
 	call_event_handler(call, CALL_EVENT_CLOSED, str);
 }
-#endif
+
+
+static void menc_event_handler(enum menc_event event,
+			       const char *prm, void *arg)
+{
+	struct call *call = arg;
+	MAGIC_CHECK(call);
+
+	debug("call: mediaenc event '%s' (%s)\n", menc_event_name(event), prm);
+
+	switch (event) {
+
+	case MENC_EVENT_SECURE:
+		if (strstr(prm, "audio")) {
+			stream_set_secure(audio_strm(call->audio), true);
+			stream_start(audio_strm(call->audio));
+			start_audio(call);
+		}
+		else if (strstr(prm, "video")) {
+			stream_set_secure(video_strm(call->video), true);
+			stream_start(video_strm(call->video));
+			start_video(call);
+		}
+		else {
+			info("call: mediaenc: no match for stream (%s)\n",
+			     prm);
+		}
+		break;
+
+	default:
+		break;
+	}
+
+	if (str_isset(prm))
+		call_event_handler(call, CALL_EVENT_MENC, "%u,%s", event,
+				   prm);
+	else
+		call_event_handler(call, CALL_EVENT_MENC, "%u", event);
+}
 
 
 static void menc_error_handler(int err, void *arg)
@@ -524,6 +622,8 @@ int call_alloc(struct call **callp, const struct config *cfg, struct list *lst,
 
 	memset(&stream_prm, 0, sizeof(stream_prm));
 	stream_prm.use_rtp = prm->use_rtp;
+	stream_prm.af      = prm->af;
+	stream_prm.cname   = local_uri;
 
 	call = mem_zalloc(sizeof(*call), call_destructor);
 	if (!call)
@@ -541,7 +641,7 @@ int call_alloc(struct call **callp, const struct config *cfg, struct list *lst,
 	call->state  = STATE_IDLE;
 	call->eh     = eh;
 	call->arg    = arg;
-	call->af     = prm ? prm->af : AF_INET;
+	call->af     = prm->af;
 
 	err = str_dup(&call->local_uri, local_uri);
 	if (local_name)
@@ -582,8 +682,9 @@ int call_alloc(struct call **callp, const struct config *cfg, struct list *lst,
 	if (acc->menc) {
 		if (acc->menc->sessh) {
 			err = acc->menc->sessh(&call->mencs, call->sdp,
-						!got_offer,
-						menc_error_handler, call);
+					       !got_offer,
+					       menc_event_handler,
+					       menc_error_handler, call);
 			if (err) {
 				warning("call: mediaenc session: %m\n", err);
 				goto out;
@@ -600,7 +701,6 @@ int call_alloc(struct call **callp, const struct config *cfg, struct list *lst,
 	if (err)
 		goto out;
 
-#ifdef USE_VIDEO
 	/* We require at least one video codec, and at least one
 	   video source or video display */
 	use_video = (vidmode != VIDMODE_OFF)
@@ -617,7 +717,7 @@ int call_alloc(struct call **callp, const struct config *cfg, struct list *lst,
 				  acc->mnat, call->mnats,
 				  acc->menc, call->mencs,
 				  "main",
-				  account_vidcodecl(call->acc),
+				  account_vidcodecl(call->acc), !got_offer,
 				  video_error_handler, call);
 		if (err)
 			goto out;
@@ -631,10 +731,6 @@ int call_alloc(struct call **callp, const struct config *cfg, struct list *lst,
 		if (err)
 			goto out;
 	}
-#else
-	(void)use_video;
-	(void)vidmode;
-#endif
 
 	/* inherit certain properties from original call */
 	if (xcall) {
@@ -671,6 +767,57 @@ int call_alloc(struct call **callp, const struct config *cfg, struct list *lst,
 }
 
 
+void call_set_custom_hdrs(struct call *call, const struct list *hdrs)
+{
+	struct le *le;
+
+	if (!call)
+		return;
+
+	list_flush(&call->custom_hdrs);
+
+	LIST_FOREACH(hdrs, le) {
+		struct sip_hdr *hdr = le->data;
+		char *buf = NULL;
+
+		if (re_sdprintf(&buf, "%r", &hdr->name))
+			return;
+
+		if (custom_hdrs_add(&call->custom_hdrs, buf,
+				    "%r", &hdr->val)) {
+			mem_deref(buf);
+			return;
+		}
+
+		mem_deref(buf);
+	}
+}
+
+
+/**
+ * Get the list of custom SIP headers
+ *
+ * @param call Call object
+ *
+ * @return List of custom SIP headers (struct sip_hdr)
+ */
+const struct list *call_get_custom_hdrs(const struct call *call)
+{
+	if (!call)
+		return NULL;
+
+	return &call->custom_hdrs;
+}
+
+
+/**
+ * Connect an outgoing call to a given SIP uri
+ *
+ * @param call  Call Object
+ * @param paddr SIP address or uri to connect to
+ *
+ * @return 0 if success, otherwise errorcode
+ */
 int call_connect(struct call *call, const struct pl *paddr)
 {
 	struct sip_addr addr;
@@ -686,8 +833,15 @@ int call_connect(struct call *call, const struct pl *paddr)
 	/* if the peer-address is a full SIP address then we need
 	 * to parse it and extract the SIP uri part.
 	 */
-	if (0 == sip_addr_decode(&addr, paddr) && addr.dname.p) {
-		err = pl_strdup(&call->peer_uri, &addr.auri);
+	if (0 == sip_addr_decode(&addr, paddr)) {
+
+		if (pl_isset(&addr.params)) {
+			err = re_sdprintf(&call->peer_uri, "%r%r",
+					  &addr.auri, &addr.params);
+		}
+		else {
+			err = pl_strdup(&call->peer_uri, &addr.auri);
+		}
 	}
 	else {
 		err = pl_strdup(&call->peer_uri, paddr);
@@ -720,6 +874,8 @@ int call_modify(struct call *call)
 
 	if (!call)
 		return EINVAL;
+
+	debug("call: modify\n");
 
 	err = call_sdp_get(call, &desc, true);
 	if (!err)
@@ -785,7 +941,8 @@ int call_progress(struct call *call)
 		return err;
 
 	err = sipsess_progress(call->sess, 183, "Session Progress",
-			       desc, "Allow: %s\r\n", uag_allowed_methods());
+			       desc, "Allow: %H\r\n",
+			       ua_print_allowed, call->ua);
 
 	if (!err)
 		call_stream_start(call, false);
@@ -824,7 +981,7 @@ int call_answer(struct call *call, uint16_t scode)
 		return err;
 
 	err = sipsess_answer(call->sess, scode, "Answering", desc,
-			     "Allow: %s\r\n", uag_allowed_methods());
+			     "Allow: %H\r\n", ua_print_allowed, call->ua);
 
 	mem_deref(desc);
 
@@ -860,11 +1017,7 @@ bool call_has_video(const struct call *call)
 	if (!call)
 		return false;
 
-#ifdef USE_VIDEO
 	return sdp_media_has_media(stream_sdpmedia(video_strm(call->video)));
-#else
-	return false;
-#endif
 }
 
 
@@ -903,18 +1056,39 @@ int call_sdp_get(const struct call *call, struct mbuf **descp, bool offer)
 }
 
 
+/**
+ * Get the session call-id for the call
+ *
+ * @param call Call object
+ *
+ * @return Session call-id
+ */
 const char *call_id(const struct call *call)
 {
 	return call ? call->id : NULL;
 }
 
 
+/**
+ * Get the URI of the peer
+ *
+ * @param call  Call object
+ *
+ * @return Peer URI
+ */
 const char *call_peeruri(const struct call *call)
 {
 	return call ? call->peer_uri : NULL;
 }
 
 
+/**
+ * Get the local URI of the call
+ *
+ * @param call  Call object
+ *
+ * @return Local URI
+ */
 const char *call_localuri(const struct call *call)
 {
 	return call ? call->local_uri : NULL;
@@ -934,6 +1108,14 @@ const char *call_peername(const struct call *call)
 }
 
 
+/**
+ * Print the call debug information
+ *
+ * @param pf   Print function
+ * @param call Call object
+ *
+ * @return 0 if success, otherwise errorcode
+ */
 int call_debug(struct re_printf *pf, const struct call *call)
 {
 	int err;
@@ -973,6 +1155,14 @@ static int print_duration(struct re_printf *pf, const struct call *call)
 }
 
 
+/**
+ * Print the call status
+ *
+ * @param pf   Print function
+ * @param call Call object
+ *
+ * @return 0 if success, otherwise errorcode
+ */
 int call_status(struct re_printf *pf, const struct call *call)
 {
 	struct le *le;
@@ -997,10 +1187,8 @@ int call_status(struct re_printf *pf, const struct call *call)
 
 	err |= re_hprintf(pf, " (bit/s)");
 
-#ifdef USE_VIDEO
 	if (call->video)
 		err |= video_print(pf, call->video);
-#endif
 
 	/* remove old junk */
 	err |= re_hprintf(pf, "    ");
@@ -1054,6 +1242,13 @@ int call_send_digit(struct call *call, char key)
 }
 
 
+/**
+ * Get the User-Agent for the call
+ *
+ * @param call Call object
+ *
+ * @return User-Agent
+ */
 struct ua *call_get_ua(const struct call *call)
 {
 	return call ? call->ua : NULL;
@@ -1077,7 +1272,7 @@ static int auth_handler(char **username, char **password,
 static int sipsess_offer_handler(struct mbuf **descp,
 				 const struct sip_msg *msg, void *arg)
 {
-	const bool got_offer = mbuf_get_left(msg->mb);
+	const bool got_offer = (0 != mbuf_get_left(msg->mb));
 	struct call *call = arg;
 	int err;
 
@@ -1111,6 +1306,8 @@ static int sipsess_answer_handler(const struct sip_msg *msg, void *arg)
 	int err;
 
 	MAGIC_CHECK(call);
+
+	debug("call: got SDP answer (%zu bytes)\n", mbuf_get_left(msg->mb));
 
 	if (msg_ctype_cmp(&msg->ctyp, "multipart", "mixed"))
 		(void)sdp_decode_multipart(&msg->ctyp.params, msg->mb);
@@ -1164,14 +1361,11 @@ static void sipsess_estab_handler(const struct sip_msg *msg, void *arg)
 }
 
 
-#ifdef USE_VIDEO
 static void call_handle_info_req(struct call *call, const struct sip_msg *req)
 {
 	struct pl body;
 	bool pfu;
 	int err;
-
-	(void)call;
 
 	pl_set_mbuf(&body, req->mb);
 
@@ -1179,11 +1373,12 @@ static void call_handle_info_req(struct call *call, const struct sip_msg *req)
 	if (err)
 		return;
 
+	debug("call: receive media control: fast_update=%d\n", pfu);
+
 	if (pfu) {
 		video_update_picture(call->video);
 	}
 }
-#endif
 
 
 static void dtmfend_handler(void *arg)
@@ -1217,7 +1412,8 @@ static void sipsess_info_handler(struct sip *sip, const struct sip_msg *msg,
 			char s = toupper(sig.p[0]);
 			uint32_t duration = pl_u32(&dur);
 
-			info("received DTMF: '%c' (duration=%r)\n", s, &dur);
+			info("call: received DTMF: '%c' (duration=%r)\n",
+			     s, &dur);
 
 			(void)sip_reply(sip, msg, 200, "OK");
 
@@ -1228,13 +1424,11 @@ static void sipsess_info_handler(struct sip *sip, const struct sip_msg *msg,
 			}
 		}
 	}
-#ifdef USE_VIDEO
 	else if (msg_ctype_cmp(&msg->ctyp,
 			       "application", "media_control+xml")) {
 		call_handle_info_req(call, msg);
 		(void)sip_reply(sip, msg, 200, "OK");
 	}
-#endif
 	else {
 		(void)sip_reply(sip, msg, 488, "Not Acceptable Here");
 	}
@@ -1246,13 +1440,14 @@ static void sipnot_close_handler(int err, const struct sip_msg *msg,
 {
 	struct call *call = arg;
 
-	if (err)
-		info("call: notification closed: %m\n", err);
-	else if (msg)
-		info("call: notification closed: %u %r\n",
-		     msg->scode, &msg->reason);
-
 	call->not = mem_deref(call->not);
+
+	if (err)
+		call_event_handler(call, CALL_EVENT_TRANSFER_FAILED,
+				   "%m", err);
+	else if (msg && msg->scode >= 300)
+		call_event_handler(call, CALL_EVENT_TRANSFER_FAILED,
+				   "%u %r", msg->scode, &msg->reason);
 }
 
 
@@ -1281,7 +1476,7 @@ static void sipsess_refer_handler(struct sip *sip, const struct sip_msg *msg,
 			      ua_cuser(call->ua), "message/sipfrag",
 			      auth_handler, call->acc, true,
 			      sipnot_close_handler, call,
-			      "Allow: %s\r\n", uag_allowed_methods());
+			      "Allow: %H\r\n", ua_print_allowed, call->ua);
 	if (err) {
 		warning("call: refer: sipevent_accept failed: %m\n", err);
 		return;
@@ -1339,7 +1534,7 @@ static bool have_common_audio_codecs(const struct call *call)
 	const struct sdp_format *sc;
 	struct aucodec *ac;
 
-	sc = sdp_media_rformat(stream_sdpmedia(audio_strm(call->audio)), NULL);
+	sc = sdp_media_rcodec(stream_sdpmedia(audio_strm(call->audio)));
 	if (!sc)
 		return false;
 
@@ -1427,8 +1622,11 @@ int call_accept(struct call *call, struct sipsess_sock *sess_sock,
 			     auth_handler, call->acc, true,
 			     sipsess_offer_handler, sipsess_answer_handler,
 			     sipsess_estab_handler, sipsess_info_handler,
-			     sipsess_refer_handler, sipsess_close_handler,
-			     call, "Allow: %s\r\n", uag_allowed_methods());
+			     call->acc->refer ? sipsess_refer_handler : NULL,
+			     sipsess_close_handler,
+			     call, "Allow: %H\r\n",
+			     ua_print_allowed, call->ua);
+
 	if (err) {
 		warning("call: sipsess_accept: %m\n", err);
 		return err;
@@ -1526,6 +1724,13 @@ static int send_invite(struct call *call)
 	if (err)
 		return err;
 
+#if 0
+	info("- - - - - S D P - O f f e r - - - - -\n"
+	     "%b"
+	     "- - - - - - - - - - - - - - - - - - -\n",
+	     desc->buf, desc->end);
+#endif
+
 	err = sipsess_connect(&call->sess, uag_sipsess_sock(),
 			      call->peer_uri,
 			      call->local_name,
@@ -1537,10 +1742,13 @@ static int send_invite(struct call *call)
 			      auth_handler, call->acc, true,
 			      sipsess_offer_handler, sipsess_answer_handler,
 			      sipsess_progr_handler, sipsess_estab_handler,
-			      sipsess_info_handler, sipsess_refer_handler,
+			      sipsess_info_handler,
+			      call->acc->refer ? sipsess_refer_handler : NULL,
 			      sipsess_close_handler, call,
-			      "Allow: %s\r\n%H", uag_allowed_methods(),
-			      ua_print_supported, call->ua);
+			      "Allow: %H\r\n%H%H",
+			      ua_print_allowed, call->ua,
+			      ua_print_supported, call->ua,
+			      custom_hdrs_print, &call->custom_hdrs);
 	if (err) {
 		warning("call: sipsess_connect: %m\n", err);
 		goto out;
@@ -1613,12 +1821,7 @@ struct audio *call_audio(const struct call *call)
  */
 struct video *call_video(const struct call *call)
 {
-#ifdef USE_VIDEO
 	return call ? call->video : NULL;
-#else
-	(void)call;
-	return NULL;
-#endif
 }
 
 
@@ -1646,6 +1849,16 @@ int call_reset_transp(struct call *call, const struct sa *laddr)
 }
 
 
+/**
+ * Send a SIP NOTIFY with a SIP message fragment
+ *
+ * @param call   Call object
+ * @param scode  SIP Status code
+ * @param reason Formatted SIP Reason phrase
+ * @param ...    Variable arguments
+ *
+ * @return 0 if success, otherwise errorcode
+ */
 int call_notify_sipfrag(struct call *call, uint16_t scode,
 			const char *reason, ...)
 {
@@ -1807,12 +2020,27 @@ int call_af(const struct call *call)
 }
 
 
+/**
+ * Get the SIP status code for the outgoing call
+ *
+ * @param call Call object
+ *
+ * @return SIP Status code
+ */
 uint16_t call_scode(const struct call *call)
 {
 	return call ? call->scode : 0;
 }
 
 
+/**
+ * Set the callback handlers for a call object
+ *
+ * @param call  Call object
+ * @param eh    Event handler
+ * @param dtmfh DTMF handler
+ * @param arg   Handler argument
+ */
 void call_set_handlers(struct call *call, call_event_h *eh,
 		       call_dtmf_h *dtmfh, void *arg)
 {
@@ -1841,18 +2069,38 @@ void call_set_xrtpstat(struct call *call)
 }
 
 
+/**
+ * Check if a call is locally on hold
+ *
+ * @param call Call object
+ *
+ * @return True if on hold (local), otherwise false
+ */
 bool call_is_onhold(const struct call *call)
 {
 	return call ? call->on_hold : false;
 }
 
 
+/**
+ * Check if a call has direction outgoing
+ *
+ * @param call Call object
+ *
+ * @return True if outgoing, otherwise false
+ */
 bool call_is_outgoing(const struct call *call)
 {
 	return call ? call->outgoing : false;
 }
 
 
+/**
+ * Enable RTP timeout for a call
+ *
+ * @param call       Call object
+ * @param timeout_ms RTP Timeout in [milliseconds]
+ */
 void call_enable_rtp_timeout(struct call *call, uint32_t timeout_ms)
 {
 	if (!call)
@@ -1875,6 +2123,14 @@ uint32_t call_linenum(const struct call *call)
 }
 
 
+/**
+ * Find the call with a given line number
+ *
+ * @param calls   List of calls
+ * @param linenum Line number from 1 to N
+ *
+ * @return Call object if found, NULL if not found
+ */
 struct call *call_find_linenum(const struct list *calls, uint32_t linenum)
 {
 	struct le *le;
@@ -1890,6 +2146,12 @@ struct call *call_find_linenum(const struct list *calls, uint32_t linenum)
 }
 
 
+/**
+ * Set the current call
+ *
+ * @param calls List of calls
+ * @param call  Call to set as current
+ */
 void call_set_current(struct list *calls, struct call *call)
 {
 	if (!calls || !call)

@@ -150,11 +150,28 @@ int mock_auplay_register(struct auplay **auplayp,
 
 
 /*
+ * Mock Audio-filter
+ */
+
+
+void mock_aufilt_register(void);
+void mock_aufilt_unregister(void);
+
+
+/*
  * Mock Media encryption
  */
 
 void mock_menc_register(void);
 void mock_menc_unregister(void);
+
+
+/*
+ * Mock Media NAT-traversal
+ */
+
+int  mock_mnat_register(struct list *mnatl);
+void mock_mnat_unregister(void);
 
 
 /*
@@ -179,48 +196,54 @@ void mock_vidcodec_unregister(void);
  */
 
 struct vidisp;
+struct vidframe;
 
-int mock_vidisp_register(struct vidisp **vidispp);
+typedef void (mock_vidisp_h)(const struct vidframe *frame, uint64_t timestamp,
+			     void *arg);
+
+int mock_vidisp_register(struct vidisp **vidispp,
+			 mock_vidisp_h *disph, void *arg);
 
 
 /* test cases */
 
 int test_account(void);
 int test_aulevel(void);
-int test_cmd(void);
-int test_cmd_long(void);
-int test_event(void);
-int test_contact(void);
-int test_ua_alloc(void);
-int test_uag_find_param(void);
-int test_ua_register(void);
-int test_ua_register_dns(void);
-int test_ua_register_auth(void);
-int test_ua_register_auth_dns(void);
-int test_ua_options(void);
-int test_message(void);
-int test_mos(void);
-int test_network(void);
-int test_play(void);
-
-int test_call_answer(void);
-int test_call_reject(void);
 int test_call_af_mismatch(void);
+int test_call_answer(void);
 int test_call_answer_hangup_a(void);
 int test_call_answer_hangup_b(void);
-int test_call_rtp_timeout(void);
-int test_call_multiple(void);
-int test_call_max(void);
-int test_call_dtmf(void);
-int test_call_video(void);
+int test_call_aufilt(void);
 int test_call_aulevel(void);
-int test_call_progress(void);
+int test_call_custom_headers(void);
+int test_call_dtmf(void);
 int test_call_format_float(void);
+int test_call_max(void);
 int test_call_mediaenc(void);
-
-#ifdef USE_VIDEO
+int test_call_medianat(void);
+int test_call_multiple(void);
+int test_call_progress(void);
+int test_call_reject(void);
+int test_call_rtcp(void);
+int test_call_rtp_timeout(void);
+int test_call_tcp(void);
+int test_call_transfer(void);
+int test_call_video(void);
+int test_cmd(void);
+int test_cmd_long(void);
+int test_contact(void);
+int test_event(void);
+int test_message(void);
+int test_network(void);
+int test_play(void);
+int test_ua_alloc(void);
+int test_ua_options(void);
+int test_ua_register(void);
+int test_ua_register_auth(void);
+int test_ua_register_auth_dns(void);
+int test_ua_register_dns(void);
+int test_uag_find_param(void);
 int test_video(void);
-#endif
 
 
 #ifdef __cplusplus

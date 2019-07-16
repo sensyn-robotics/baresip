@@ -13,8 +13,14 @@
 #define SECRET_KEY 0xdd
 
 
+struct menc_sess {
+	menc_event_h *eventh;
+	void *arg;
+};
+
+
 struct menc_media {
-	void *rtpsock;
+	struct udp_sock *rtpsock;
 	struct udp_helper *uh_rtp;
 };
 
@@ -67,10 +73,48 @@ static bool recv_handler(struct sa *src, struct mbuf *mb, void *arg)
 }
 
 
+static void sess_destructor(void *arg)
+{
+	struct menc_sess *sess = arg;
+	(void)sess;
+}
+
+
+static int mock_session_alloc(struct menc_sess **sessp,
+			      struct sdp_session *sdp, bool offerer,
+			      menc_event_h *eventh, menc_error_h *errorh,
+			      void *arg)
+{
+	struct menc_sess *sess;
+	int err = 0;
+	(void)offerer;
+	(void)errorh;
+
+	if (!sessp || !sdp)
+		return EINVAL;
+
+	sess = mem_zalloc(sizeof(*sess), sess_destructor);
+	if (!sess)
+		return ENOMEM;
+
+	sess->eventh  = eventh;
+	sess->arg     = arg;
+
+	if (err)
+		mem_deref(sess);
+	else
+		*sessp = sess;
+
+	return err;
+}
+
+
 static int mock_media_alloc(struct menc_media **mmp, struct menc_sess *sess,
-			    struct rtp_sock *rtp, int proto,
-			    void *rtpsock, void *rtcpsock,
-			    struct sdp_media *sdpm)
+			   struct rtp_sock *rtp,
+			   struct udp_sock *rtpsock, struct udp_sock *rtcpsock,
+			   const struct sa *raddr_rtp,
+			   const struct sa *raddr_rtcp,
+			   struct sdp_media *sdpm)
 {
 	struct menc_media *mm;
 	const int layer = 10; /* above zero */
@@ -78,11 +122,11 @@ static int mock_media_alloc(struct menc_media **mmp, struct menc_sess *sess,
 	(void)sess;
 	(void)rtp;
 	(void)rtcpsock;
+	(void)raddr_rtp;
+	(void)raddr_rtcp;
 
 	if (!mmp || !sdpm)
 		return EINVAL;
-	if (proto != IPPROTO_UDP)
-		return EPROTONOSUPPORT;
 
 	mm = *mmp;
 	if (!mm) {
@@ -99,6 +143,21 @@ static int mock_media_alloc(struct menc_media **mmp, struct menc_sess *sess,
 		*mmp = mm;
 	}
 
+	err = sdp_media_set_lattr(sdpm, true, "xrtp", NULL);
+	if (err)
+		goto out;
+
+	if (sdp_media_rattr(sdpm, "xrtp")) {
+
+		char buf[64];
+
+		re_snprintf(buf, sizeof(buf), "%s,xrtp",
+			    sdp_media_name(sdpm));
+
+		if (sess->eventh)
+			sess->eventh(MENC_EVENT_SECURE, buf, sess->arg);
+	}
+
  out:
 	if (err)
 		mem_deref(mm);
@@ -110,6 +169,7 @@ static int mock_media_alloc(struct menc_media **mmp, struct menc_sess *sess,
 static struct menc menc_mock = {
 	.id        = "XRTP",
 	.sdp_proto = "RTP/XAVP",
+	.sessh     = mock_session_alloc,
 	.mediah    = mock_media_alloc
 };
 

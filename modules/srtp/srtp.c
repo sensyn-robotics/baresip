@@ -25,11 +25,15 @@
  */
 
 
-#define SRTP_MASTER_KEY_LEN  30
+struct menc_sess {
+	menc_event_h *eventh;
+	void *arg;
+};
 
 
 struct menc_st {
 	/* one SRTP session per media line */
+	const struct menc_sess *sess;
 	uint8_t key_tx[32];
 	uint8_t key_rx[32];
 	struct srtp *srtp_tx, *srtp_rx;
@@ -47,6 +51,7 @@ struct menc_st {
 
 static const char aes_cm_128_hmac_sha1_32[] = "AES_CM_128_HMAC_SHA1_32";
 static const char aes_cm_128_hmac_sha1_80[] = "AES_CM_128_HMAC_SHA1_80";
+static const char aes_128_gcm[]             = "AEAD_AES_128_GCM";
 
 static const char *preferred_suite = aes_cm_128_hmac_sha1_80;
 
@@ -73,6 +78,7 @@ static bool cryptosuite_issupported(const struct pl *suite)
 {
 	if (0 == pl_strcasecmp(suite, aes_cm_128_hmac_sha1_32)) return true;
 	if (0 == pl_strcasecmp(suite, aes_cm_128_hmac_sha1_80)) return true;
+	if (0 == pl_strcasecmp(suite, aes_128_gcm))             return true;
 
 	return false;
 }
@@ -122,21 +128,38 @@ static enum srtp_suite resolve_suite(const char *suite)
 		return SRTP_AES_CM_128_HMAC_SHA1_32;
 	if (0 == str_casecmp(suite, aes_cm_128_hmac_sha1_80))
 		return SRTP_AES_CM_128_HMAC_SHA1_80;
+	if (0 == str_casecmp(suite, aes_128_gcm))
+		return SRTP_AES_128_GCM;
 
 	return -1;
+}
+
+
+static size_t get_master_keylen(enum srtp_suite suite)
+{
+	switch (suite) {
+
+	case SRTP_AES_CM_128_HMAC_SHA1_32: return 16+14;
+	case SRTP_AES_CM_128_HMAC_SHA1_80: return 16+14;
+	case SRTP_AES_128_GCM:             return 16+12;
+	default: return 0;
+	}
 }
 
 
 static int start_srtp(struct menc_st *st, const char *suite_name)
 {
 	enum srtp_suite suite;
+	size_t len;
 	int err;
 
 	suite = resolve_suite(suite_name);
 
+	len = get_master_keylen(suite);
+
 	/* allocate and initialize the SRTP session */
 	if (!st->srtp_tx) {
-		err = srtp_alloc(&st->srtp_tx, suite, st->key_tx, 30, 0);
+		err = srtp_alloc(&st->srtp_tx, suite, st->key_tx, len, 0);
 		if (err) {
 			warning("srtp: srtp_alloc TX failed (%m)\n", err);
 			return err;
@@ -144,7 +167,7 @@ static int start_srtp(struct menc_st *st, const char *suite_name)
 	}
 
 	if (!st->srtp_rx) {
-		err = srtp_alloc(&st->srtp_rx, suite, st->key_rx, 30, 0);
+		err = srtp_alloc(&st->srtp_rx, suite, st->key_rx, len, 0);
 		if (err) {
 			warning("srtp: srtp_alloc RX failed (%m)\n", err);
 			return err;
@@ -225,11 +248,13 @@ static int sdp_enc(struct menc_st *st, struct sdp_media *m,
 		   uint32_t tag, const char *suite)
 {
 	char key[128] = "";
-	size_t olen;
+	size_t len, olen;
 	int err;
 
+	len = get_master_keylen(resolve_suite(suite));
+
 	olen = sizeof(key);
-	err = base64_encode(st->key_tx, SRTP_MASTER_KEY_LEN, key, &olen);
+	err = base64_encode(st->key_tx, len, key, &olen);
 	if (err)
 		return err;
 
@@ -239,8 +264,11 @@ static int sdp_enc(struct menc_st *st, struct sdp_media *m,
 
 static int start_crypto(struct menc_st *st, const struct pl *key_info)
 {
-	size_t olen;
+	size_t olen, len;
+	char buf[64] = "";
 	int err;
+
+	len = get_master_keylen(resolve_suite(st->crypto_suite));
 
 	/* key-info is BASE64 encoded */
 
@@ -249,8 +277,9 @@ static int start_crypto(struct menc_st *st, const struct pl *key_info)
 	if (err)
 		return err;
 
-	if (SRTP_MASTER_KEY_LEN != olen) {
-		warning("srtp: srtp keylen is %u (should be 30)\n", olen);
+	if (len != olen) {
+		warning("srtp: %s: srtp keylen is %u (should be %zu)\n",
+			st->crypto_suite, olen, len);
 	}
 
 	err = start_srtp(st, st->crypto_suite);
@@ -259,6 +288,17 @@ static int start_crypto(struct menc_st *st, const struct pl *key_info)
 
 	info("srtp: %s: SRTP is Enabled (cryptosuite=%s)\n",
 	     sdp_media_name(st->sdpm), st->crypto_suite);
+
+	if (st->sess->eventh) {
+		if (re_snprintf(buf, sizeof(buf), "%s,%s",
+				sdp_media_name(st->sdpm),
+				st->crypto_suite))
+			st->sess->eventh(MENC_EVENT_SECURE, buf,
+					 st->sess->arg);
+		else
+			warning("srtp: failed to print secure"
+				" event arguments\n");
+	}
 
 	return 0;
 }
@@ -291,9 +331,37 @@ static bool sdp_attr_handler(const char *name, const char *value, void *arg)
 }
 
 
-static int alloc(struct menc_media **stp, struct menc_sess *sess,
+static int session_alloc(struct menc_sess **sessp,
+			 struct sdp_session *sdp, bool offerer,
+			 menc_event_h *eventh, menc_error_h *errorh,
+			 void *arg)
+{
+	struct menc_sess *sess;
+	(void)sdp;
+	(void)offerer;
+	(void)errorh;
+
+	if (!sessp)
+		return EINVAL;
+
+	sess = mem_zalloc(sizeof(*sess), NULL);
+	if (!sess)
+		return ENOMEM;
+
+	sess->eventh  = eventh;
+	sess->arg     = arg;
+
+	*sessp = sess;
+
+	return 0;
+}
+
+
+static int media_alloc(struct menc_media **stp, struct menc_sess *sess,
 		 struct rtp_sock *rtp,
-		 int proto, void *rtpsock, void *rtcpsock,
+		 struct udp_sock *rtpsock, struct udp_sock *rtcpsock,
+	         const struct sa *raddr_rtp,
+	         const struct sa *raddr_rtcp,
 		 struct sdp_media *sdpm)
 {
 	struct menc_st *st;
@@ -303,11 +371,11 @@ static int alloc(struct menc_media **stp, struct menc_sess *sess,
 	bool mux = (rtpsock == rtcpsock);
 	(void)sess;
 	(void)rtp;
+	(void)raddr_rtp;
+	(void)raddr_rtcp;
 
-	if (!stp || !sdpm)
+	if (!stp || !sdpm || !sess)
 		return EINVAL;
-	if (proto != IPPROTO_UDP)
-		return EPROTONOSUPPORT;
 
 	st = (struct menc_st *)*stp;
 	if (!st) {
@@ -316,15 +384,18 @@ static int alloc(struct menc_media **stp, struct menc_sess *sess,
 		if (!st)
 			return ENOMEM;
 
+		st->sess = sess;
 		st->sdpm = mem_ref(sdpm);
 
-		err = sdp_media_set_alt_protos(st->sdpm, 4,
-					       "RTP/AVP",
-					       "RTP/AVPF",
-					       "RTP/SAVP",
-					       "RTP/SAVPF");
-		if (err)
-			goto out;
+		if (0 == str_cmp(sdp_media_proto(sdpm), "RTP/AVP")) {
+			err = sdp_media_set_alt_protos(st->sdpm, 4,
+						       "RTP/AVP",
+						       "RTP/AVPF",
+						       "RTP/SAVP",
+						       "RTP/SAVPF");
+			if (err)
+				goto out;
+		}
 
 		if (rtpsock) {
 			st->rtpsock = mem_ref(rtpsock);
@@ -346,7 +417,7 @@ static int alloc(struct menc_media **stp, struct menc_sess *sess,
 		if (err)
 			goto out;
 
-		rand_bytes(st->key_tx, SRTP_MASTER_KEY_LEN);
+		rand_bytes(st->key_tx, sizeof(st->key_tx));
 	}
 
 	/* SDP handling */
@@ -378,15 +449,24 @@ static int alloc(struct menc_media **stp, struct menc_sess *sess,
 
 
 static struct menc menc_srtp_opt = {
-	LE_INIT, "srtp", "RTP/AVP", NULL, alloc
+	.id        = "srtp",
+	.sdp_proto = "RTP/AVP",
+	.sessh     = session_alloc,
+	.mediah    = media_alloc
 };
 
 static struct menc menc_srtp_mand = {
-	LE_INIT, "srtp-mand", "RTP/SAVP", NULL, alloc
+	.id        = "srtp-mand",
+	.sdp_proto = "RTP/SAVP",
+	.sessh     = session_alloc,
+	.mediah    = media_alloc
 };
 
 static struct menc menc_srtp_mandf = {
-	LE_INIT, "srtp-mandf", "RTP/SAVPF", NULL, alloc
+	.id        = "srtp-mandf",
+	.sdp_proto = "RTP/SAVPF",
+	.sessh     = session_alloc,
+	.mediah    = media_alloc
 };
 
 

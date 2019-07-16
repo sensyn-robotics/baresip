@@ -67,10 +67,11 @@ struct mnat_media {
 	bool complete;
 	bool terminated;
 	int nstun;                   /**< Number of pending STUN candidates  */
+	mnat_connected_h *connh;
+	void *arg;
 };
 
 
-static struct mnat *mnat;
 static struct {
 	enum ice_mode mode;
 	enum ice_nomination nom;
@@ -698,6 +699,7 @@ static void conncheck_handler(int err, bool update, void *arg)
 		warning("ice: connectivity check failed: %m\n", err);
 	}
 	else {
+		const struct ice_cand *cand1, *cand2;
 		bool changed;
 
 		m->complete = true;
@@ -709,6 +711,15 @@ static void conncheck_handler(int err, bool update, void *arg)
 			sess->send_reinvite = true;
 
 		(void)set_media_attributes(m);
+
+		cand1 = icem_selected_rcand(m->icem, 1);
+		cand2 = icem_selected_rcand(m->icem, 2);
+
+		if (m->connh) {
+			m->connh(icem_lcand_addr(cand1),
+				  icem_lcand_addr(cand2),
+				  m->arg);
+		}
 
 		/* Check all conncheck flags */
 		LIST_FOREACH(&sess->medial, le) {
@@ -788,8 +799,9 @@ static int ice_start(struct mnat_sess *sess)
 
 
 static int media_alloc(struct mnat_media **mp, struct mnat_sess *sess,
-		       int proto, void *sock1, void *sock2,
-		       struct sdp_media *sdpm)
+		       struct udp_sock *sock1, struct udp_sock *sock2,
+		       struct sdp_media *sdpm,
+		       mnat_connected_h *connh, void *arg)
 {
 	struct mnat_media *m;
 	enum ice_role role;
@@ -815,7 +827,7 @@ static int media_alloc(struct mnat_media **mp, struct mnat_sess *sess,
 		role = ICE_ROLE_CONTROLLED;
 
 	err = icem_alloc(&m->icem, ice.mode, role,
-			 proto, ICE_LAYER,
+			 IPPROTO_UDP, ICE_LAYER,
 			 sess->tiebrk, sess->lufrag, sess->lpwd,
 			 conncheck_handler, m);
 	if (err)
@@ -835,6 +847,9 @@ static int media_alloc(struct mnat_media **mp, struct mnat_sess *sess,
 		if (m->compv[i].sock)
 			err |= icem_comp_add(m->icem, i+1, m->compv[i].sock);
 	}
+
+	m->connh = connh;
+	m->arg = arg;
 
 	if (sa_isset(&sess->srv, SA_ALL))
 		err |= media_start(sess, m);
@@ -937,9 +952,18 @@ static int update(struct mnat_sess *sess)
 }
 
 
+static struct mnat mnat_ice = {
+	.id      = "ice",
+	.ftag    = "+sip.ice",
+	.wait_connected = true,
+	.sessh   = session_alloc,
+	.mediah  = media_alloc,
+	.updateh = update,
+};
+
+
 static int module_init(void)
 {
-#ifdef MODULE_CONF
 	struct pl pl;
 
 	conf_get_bool(conf_cur(), "ice_turn", &ice.turn);
@@ -965,17 +989,16 @@ static int module_init(void)
 			return EINVAL;
 		}
 	}
-#endif
 
-	return mnat_register(&mnat, baresip_mnatl(),
-			     "ice", "+sip.ice",
-			     session_alloc, media_alloc, update);
+	mnat_register(baresip_mnatl(), &mnat_ice);
+
+	return 0;
 }
 
 
 static int module_close(void)
 {
-	mnat = mem_deref(mnat);
+	mnat_unregister(&mnat_ice);
 
 	return 0;
 }

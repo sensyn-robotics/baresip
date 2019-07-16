@@ -13,17 +13,17 @@
 #   USE_AVFORMAT      avformat video source module
 #   USE_BV32          BroadVoice32 Wideband Audio codec
 #   USE_CAIRO         Cairo module
+#   USE_CODEC2        CODEC2 low-bitrate speech audio codec
 #   USE_CONS          Console input driver
 #   USE_COREAUDIO     MacOSX Coreaudio audio driver
+#   USE_ECHO          Echo module
 #   USE_EVDEV         Event Device module
 #   USE_G711          G.711 audio codec
 #   USE_G722          G.722 audio codec
 #   USE_G722_1        G.722.1 audio codec
 #   USE_G726          G.726 audio codec
 #   USE_GSM           GSM audio codec
-#   USE_GST           Gstreamer 0.10 audio module
 #   USE_GST1          Gstreamer 1.0 audio module
-#   USE_GST_VIDEO     Gstreamer 0.10 video module
 #   USE_GST_VIDEO1    Gstreamer 1.0 video module
 #   USE_GTK           GTK+ user interface
 #   USE_H265          H.265 video codec
@@ -36,20 +36,18 @@
 #   USE_OMX_RPI       RaspberryPi VideoCore display driver
 #   USE_OMX_BELLAGIO  libomxil-bellagio xvideosink driver
 #   USE_OPUS          Opus audio codec
+#   USE_OPUS_MS       Opus multistream audio codec
 #   USE_OSS           OSS audio driver
 #   USE_PLC           Packet Loss Concealment
 #   USE_PORTAUDIO     Portaudio audio driver
 #   USE_PULSE         Pulseaudio audio driver
-#   USE_SDL           libSDL video output
-#   USE_SILK          SILK (Skype) audio codec
+#   USE_RTCPSUMMARY   RTCP summary output after calls
+#   USE_SDL2          libSDL2 video output
 #   USE_SNDFILE       sndfile wav dumper
-#   USE_SPEEX         Speex audio codec
-#   USE_SPEEX_AEC     Speex Acoustic Echo Canceller
 #   USE_SPEEX_PP      Speex preprocessor
 #   USE_SRTP          Secure RTP module using libre
 #   USE_STDIO         stdio input driver
 #   USE_SYSLOG        Syslog module
-#   USE_V4L           Video4Linux module
 #   USE_V4L2          Video4Linux2 module
 #   USE_WINWAVE       Windows audio driver
 #   USE_X11           X11 video output
@@ -87,6 +85,9 @@ USE_BV32  := $(shell [ -f $(SYSROOT)/include/bv32/bv32.h ] || \
 USE_CAIRO  := $(shell [ -f $(SYSROOT)/include/cairo/cairo.h ] || \
 	[ -f $(SYSROOT)/local/include/cairo/cairo.h ] || \
 	[ -f $(SYSROOT_ALT)/include/cairo/cairo.h ] && echo "yes")
+USE_CODEC2  := $(shell [ -f $(SYSROOT)/include/codec2/codec2.h ] || \
+	[ -f $(SYSROOT)/local/include/codec2/codec2.h ] || \
+	[ -f $(SYSROOT_ALT)/include/codec2/codec2.h ] && echo "yes")
 USE_DTLS := $(shell [ -f $(SYSROOT)/include/openssl/dtls1.h ] || \
 	[ -f $(SYSROOT)/local/include/openssl/dtls1.h ] || \
 	[ -f $(SYSROOT_ALT)/include/openssl/dtls1.h ] && echo "yes")
@@ -107,19 +108,13 @@ USE_GSM := $(shell [ -f $(SYSROOT)/include/gsm.h ] || \
 	[ -f $(SYSROOT)/include/gsm/gsm.h ] || \
 	[ -f $(SYSROOT)/local/include/gsm.h ] || \
 	[ -f $(SYSROOT)/local/include/gsm/gsm.h ] && echo "yes")
-USE_GST := $(shell pkg-config --exists gstreamer-0.10 && echo "yes")
 USE_GST1 := $(shell pkg-config --exists gstreamer-1.0 && echo "yes")
-USE_GST_VIDEO := \
-	$(shell pkg-config --exists gstreamer-0.10 gstreamer-app-0.10 \
-		&& echo "yes")
 USE_GST_VIDEO1 := $(shell pkg-config --exists gstreamer-1.0 gstreamer-app-1.0 \
 		&& echo "yes")
 USE_GTK := $(shell pkg-config 'gtk+-2.0 >= 2.22' && \
 		   pkg-config 'glib-2.0 >= 2.32' && echo "yes")
 ifneq ($(USE_AVCODEC),)
-USE_H265  := $(shell [ -f $(SYSROOT)/include/x265.h ] || \
-	[ -f $(SYSROOT)/local/include/x265.h ] || \
-	[ -f $(SYSROOT_ALT)/include/x265.h ] && echo "yes")
+USE_H265  := yes
 endif
 USE_ILBC := $(shell [ -f $(SYSROOT)/include/iLBC_define.h ] || \
 	[ -f $(SYSROOT)/local/include/iLBC_define.h ] && echo "yes")
@@ -133,6 +128,9 @@ USE_MPG123  := $(shell [ -f $(SYSROOT)/include/mpg123.h ] || \
 USE_OPUS := $(shell [ -f $(SYSROOT)/include/opus/opus.h ] || \
 	[ -f $(SYSROOT_ALT)/include/opus/opus.h ] || \
 	[ -f $(SYSROOT)/local/include/opus/opus.h ] && echo "yes")
+USE_OPUS_MS := $(shell [ -f $(SYSROOT)/include/opus/opus_multistream.h ] || \
+	[ -f $(SYSROOT_ALT)/include/opus/opus_multistream.h ] || \
+	[ -f $(SYSROOT)/local/include/opus/opus_multistream.h ] && echo "yes")
 USE_OSS := $(shell [ -f $(SYSROOT)/include/soundcard.h ] || \
 	[ -f $(SYSROOT)/include/linux/soundcard.h ] || \
 	[ -f $(SYSROOT)/include/sys/soundcard.h ] && echo "yes")
@@ -143,16 +141,11 @@ USE_PORTAUDIO := $(shell [ -f $(SYSROOT)/local/include/portaudio.h ] || \
 		[ -f $(SYSROOT)/include/portaudio.h ] || \
 		[ -f $(SYSROOT_ALT)/include/portaudio.h ] && echo "yes")
 USE_PULSE := $(shell pkg-config --exists libpulse && echo "yes")
-USE_SDL  := $(shell [ -f $(SYSROOT)/include/SDL/SDL.h ] || \
-	[ -f $(SYSROOT)/local/include/SDL/SDL.h ] || \
-	[ -f $(SYSROOT_ALT)/include/SDL/SDl.h ] && echo "yes")
 USE_SDL2  := $(shell [ -f $(SYSROOT)/include/SDL2/SDL.h ] || \
 	[ -f $(SYSROOT)/local/include/SDL2/SDL.h ] || \
 	[ -f $(SYSROOT_ALT)/include/SDL2/SDl.h ] && echo "yes")
-USE_SILK := $(shell [ -f $(SYSROOT)/include/silk/SKP_Silk_SDK_API.h ] || \
-	[ -f $(SYSROOT_ALT)/include/silk/SKP_Silk_SDK_API.h ] || \
-	[ -f $(SYSROOT)/local/include/silk/SKP_Silk_SDK_API.h ] && echo "yes")
 USE_SNDFILE := $(shell [ -f $(SYSROOT)/include/sndfile.h ] || \
+	[ -f $(SYSROOT)/local/include/sndfile.h ] || \
 	[ -f $(SYSROOT_ALT)/include/sndfile.h ] || \
 	[ -f $(SYSROOT_ALT)/usr/local/include/sndfile.h ] && echo "yes")
 USE_STDIO := $(shell [ -f $(SYSROOT)/include/termios.h ] && echo "yes")
@@ -171,9 +164,6 @@ USE_MPA  := $(shell [ -f $(SYSROOT)/include/twolame.h ] || \
 	[ -f $(SYSROOT_ALT)/include/twolame.h ] && echo "yes")
 endif
 endif
-USE_SPEEX_AEC := $(shell [ -f $(SYSROOT)/include/speex/speex_echo.h ] || \
-	[ -f $(SYSROOT)/local/include/speex/speex_echo.h ] || \
-	[ -f $(SYSROOT_ALT)/include/speex/speex_echo.h ] && echo "yes")
 USE_SPEEX_PP := $(shell [ -f $(SYSROOT)/include/speex_preprocess.h ] || \
 	[ -f $(SYSROOT)/local/include/speex_preprocess.h ] || \
 	[ -f $(SYSROOT)/local/include/speex/speex_preprocess.h ] || \
@@ -182,11 +172,8 @@ USE_SPEEX_PP := $(shell [ -f $(SYSROOT)/include/speex_preprocess.h ] || \
 USE_SYSLOG := $(shell [ -f $(SYSROOT)/include/syslog.h ] || \
 	[ -f $(SYSROOT_ALT)/include/syslog.h ] || \
 	[ -f $(SYSROOT)/local/include/syslog.h ] && echo "yes")
-HAVE_LIBMQTT := $(shell [ -f $(SYSROOT)/include/mosquitto.h ] || \
+USE_MQTT := $(shell [ -f $(SYSROOT)/include/mosquitto.h ] || \
 	[ -f $(SYSROOT)/local/include/mosquitto.h ] \
-	&& echo "yes")
-USE_V4L  := $(shell [ -f $(SYSROOT)/include/libv4l1.h ] || \
-	[ -f $(SYSROOT)/local/include/libv4l1.h ] \
 	&& echo "yes")
 HAVE_LIBV4L2 := $(shell [ -f $(SYSROOT)/include/libv4l2.h ] || \
 	[ -f $(SYSROOT)/local/include/libv4l2.h ] \
@@ -222,8 +209,6 @@ endif
 
 # Platform specific modules
 ifeq ($(OS),darwin)
-USE_COREAUDIO := yes
-USE_OPENGL    := yes
 
 USE_AVFOUNDATION := \
 	$(shell [ -d /System/Library/Frameworks/AVFoundation.framework ] \
@@ -231,6 +216,10 @@ USE_AVFOUNDATION := \
 
 USE_AUDIOUNIT := \
 	$(shell [ -d /System/Library/Frameworks/AudioUnit.framework ] \
+		&& echo "yes")
+
+USE_COREAUDIO := \
+	$(shell [ -d /System/Library/Frameworks/CoreAudio.framework ] \
 		&& echo "yes")
 
 ifneq ($(USE_AVFOUNDATION),)
@@ -265,25 +254,35 @@ endif
 # ------------------------------------------------------------------------- #
 
 MODULES   += $(EXTRA_MODULES)
-MODULES   += stun turn ice natbd auloop presence
-MODULES   += menu contact vumeter mwi account natpmp httpd
-MODULES   += srtp
-MODULES   += uuid
-MODULES   += debug_cmd
+ifneq ($(BASIC_MODULES),no)
+MODULES   += account
+MODULES   += auloop
+MODULES   += b2bua
+MODULES   += contact
 MODULES   += ctrl_tcp
-
-ifneq ($(HAVE_LIBMQTT),)
-MODULES   += mqtt
-endif
+MODULES   += debug_cmd
+MODULES   += echo
+MODULES   += fakevideo
+MODULES   += httpd
+MODULES   += ice
+MODULES   += menu
+MODULES   += mwi
+MODULES   += natpmp
+MODULES   += presence
+MODULES   += selfview
+MODULES   += srtp
+MODULES   += stun
+MODULES   += turn
+MODULES   += uuid
+MODULES   += vidbridge
+MODULES   += vidloop
+MODULES   += vumeter
 
 ifneq ($(HAVE_PTHREAD),)
 MODULES   += aubridge aufile
 endif
-ifneq ($(USE_VIDEO),)
-MODULES   += vidloop selfview vidbridge
-MODULES   += fakevideo
-endif
 
+endif
 
 ifneq ($(USE_ALSA),)
 MODULES   += alsa
@@ -316,6 +315,9 @@ ifneq ($(USE_MPG123),)
 MODULES   += rst
 endif
 endif
+ifneq ($(USE_CODEC2),)
+MODULES   += codec2
+endif
 ifneq ($(USE_CONS),)
 MODULES   += cons
 endif
@@ -328,6 +330,9 @@ endif
 ifneq ($(USE_QTCAPTURE),)
 MODULES   += qtcapture
 CFLAGS    += -DQTCAPTURE_RUNLOOP
+endif
+ifneq ($(USE_ECHO),)
+MODULES   += echo
 endif
 ifneq ($(USE_EVDEV),)
 MODULES   += evdev
@@ -347,14 +352,8 @@ endif
 ifneq ($(USE_GSM),)
 MODULES   += gsm
 endif
-ifneq ($(USE_GST),)
-MODULES   += gst
-endif
 ifneq ($(USE_GST1),)
 MODULES   += gst1
-endif
-ifneq ($(USE_GST_VIDEO),)
-MODULES   += gst_video
 endif
 ifneq ($(USE_GST_VIDEO1),)
 MODULES   += gst_video1
@@ -377,6 +376,15 @@ endif
 ifneq ($(USE_L16),)
 MODULES   += l16
 endif
+ifneq ($(USE_OPUS_MS),)
+MODULES   += opus_multistream
+endif
+ifneq ($(USE_MPA),)
+MODULES   += mpa
+endif
+ifneq ($(USE_MQTT),)
+MODULES   += mqtt
+endif
 ifneq ($(USE_OPENGL),)
 MODULES   += opengl
 endif
@@ -385,9 +393,6 @@ MODULES   += opengles
 endif
 ifneq ($(USE_OPUS),)
 MODULES   += opus
-endif
-ifneq ($(USE_MPA),)
-MODULES   += mpa
 endif
 ifneq ($(USE_OSS),)
 MODULES   += oss
@@ -401,23 +406,11 @@ endif
 ifneq ($(USE_PULSE),)
 MODULES   += pulse
 endif
-ifneq ($(USE_SDL),)
-MODULES   += sdl
-endif
 ifneq ($(USE_SDL2),)
 MODULES   += sdl2
 endif
-ifneq ($(USE_SILK),)
-MODULES   += silk
-endif
 ifneq ($(USE_SNDFILE),)
 MODULES   += sndfile
-endif
-ifneq ($(USE_SPEEX),)
-MODULES   += speex
-endif
-ifneq ($(USE_SPEEX_AEC),)
-MODULES   += speex_aec
 endif
 ifneq ($(USE_SPEEX_PP),)
 MODULES   += speex_pp
@@ -428,17 +421,15 @@ endif
 ifneq ($(USE_SYSLOG),)
 MODULES   += syslog
 endif
-ifneq ($(USE_V4L),)
-MODULES   += v4l
-endif
 ifneq ($(USE_V4L2),)
 MODULES   += v4l2 v4l2_codec
 endif
 ifneq ($(USE_OMX_RPI),)
 MODULES   += omx
-endif
+else
 ifneq ($(USE_OMX_BELLAGIO),)
 MODULES   += omx
+endif
 endif
 ifneq ($(USE_VPX),)
 MODULES   += vp8
@@ -458,4 +449,7 @@ MODULES   += gzrtp
 endif
 ifneq ($(USE_DSHOW),)
 MODULES   += dshow
+endif
+ifneq ($(USE_RTCPSUMMARY),)
+MODULES   += rtcpsummary
 endif
